@@ -147,12 +147,30 @@ jobs:
 
       - name: Free Up macOS Runner Disk Space
         run: |
-          python3 /tmp/miao_live.py "disk" "Dọn ổ đĩa máy ảo macOS" 12 "" "" "Đang giải phóng dung lượng trống..." || true
+          python3 /tmp/miao_live.py "disk" "Dọn ổ đĩa máy ảo macOS" 12 "" "" "Đang giải phóng tối đa dung lượng trống..." || true
           echo "=== Disk space before cleanup ==="
           df -h /
-          sudo rm -rf /Users/runner/Library/Android/sdk /usr/local/lib/android 2>/dev/null || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/* 2>/dev/null || true
-          rm -rf ~/Library/Caches/* /tmp/*.dmg 2>/dev/null || true
+
+          # 1. Xóa các bản Xcode phụ không dùng (giữ nguyên bản Xcode đang active)
+          ACTIVE_XCODE="$(xcode-select -p 2>/dev/null | sed -E 's|^(/Applications/[^/]+\.app).*|\1|' || true)"
+          echo "Active Xcode: ${ACTIVE_XCODE:-unknown}"
+          for app in /Applications/Xcode*.app; do
+            if [ -d "$app" ] && [ "$app" != "$ACTIVE_XCODE" ]; then
+              echo "Removing unused Xcode: $app"
+              sudo rm -rf "$app" 2>/dev/null || true
+            fi
+          done
+
+          # 2. Xóa Simulator runtimes (build IPA thật cho iPhone không cần Simulator)
+          xcrun simctl delete unavailable 2>/dev/null || true
+          xcrun simctl runtime delete all 2>/dev/null || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/* /Library/Developer/CoreSimulator/Images/* 2>/dev/null || true
+
+          # 3. Xóa SDK & cache nặng không dùng (Android, Java, Rust, Gradle, npm, Caches)
+          sudo rm -rf /Users/runner/Library/Android /usr/local/lib/android /Library/Java/JavaVirtualMachines 2>/dev/null || true
+          sudo rm -rf /Users/runner/.rustup /Users/runner/.cargo /Users/runner/.gradle /Users/runner/.m2 /Users/runner/.npm 2>/dev/null || true
+          rm -rf ~/Library/Caches/* ~/Library/Developer/Xcode/DerivedData /tmp/*.dmg 2>/dev/null || true
+
           echo "=== Disk space after cleanup ==="
           df -h /
 
@@ -586,8 +604,9 @@ jobs:
               if ow + add == 0:
                   print("[VH ERROR] No files were overlaid into vh_stage/RomFS.", file=sys.stderr)
                   sys.exit(1)
-              # Dọn file tạm & RomFS.img/IPA cũ trước khi đóng gói để tránh [Errno 28] No space left on device
+              # Dọn tối đa file tạm, DerivedData, RomFS.img cũ & IPA cũ trước khi đóng gói lại RomFS.img
               shutil.rmtree(vh_raw, ignore_errors=True)
+              shutil.rmtree(os.path.expanduser("~/Library/Developer/Xcode/DerivedData"), ignore_errors=True)
               exefs_stage = next((os.path.join(stage, e) for e in os.listdir(stage) if e.lower() == "exefs"), None)
               if exefs_stage:
                   shutil.rmtree(exefs_stage, ignore_errors=True)
@@ -599,6 +618,7 @@ jobs:
               if os.path.isfile(romfs_img):
                   os.remove(romfs_img)
               subprocess.run(["df", "-h", "/"])
+              subprocess.run(["du", "-sh", os.path.join(root, "game_files"), stage, os.path.join(root, "src"), os.path.join(root, "out_ipa")], check=False)
               subprocess.run([sys.executable, romfs_tool, s_romfs, romfs_img], check=True)
               shutil.rmtree(stage, ignore_errors=True)
           else:
@@ -618,8 +638,8 @@ jobs:
             if [ -n "$ROMFS_IMG" ]; then mv -f "$ROMFS_IMG" "$ROOT/out_ipa/romfs.img"; fi
           fi
 
-          # Giải phóng toàn bộ thư mục game_files/vh trước khi giải nén & nén lại IPA gắn credit
-          rm -rf "$ROOT/game_files" "$ROOT/vh_raw" "$ROOT/vh_stage"
+          # Giải phóng toàn bộ thư mục tạm & DerivedData trước khi giải nén/nén lại IPA gắn credit
+          rm -rf "$ROOT/game_files" "$ROOT/vh_raw" "$ROOT/vh_stage" ~/Library/Developer/Xcode/DerivedData
           df -h /
 
           mkdir -p "$ROOT/tmp_ipa"
